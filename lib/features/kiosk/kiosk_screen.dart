@@ -4,7 +4,8 @@ import '../../core/network/api_client.dart';
 
 class KioskScreen extends ConsumerStatefulWidget {
   final String tenantId;
-  const KioskScreen({super.key, required this.tenantId});
+  // Le damos un valor por defecto (el GUID real de tu hotel Concept)
+  const KioskScreen({super.key, this.tenantId = 'EL_GUID_DE_CONCEPT_HOTEL'});
 
   @override
   ConsumerState<KioskScreen> createState() => _KioskScreenState();

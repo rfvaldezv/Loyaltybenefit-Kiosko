@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   dio: ^5.11.1
   flutter_riverpod: ^3.4.3
+  flutter_secure_storage: ^11.2.0
+  flutter_launcher_icons: ^0.14.3
 
 dev_dependencies:
   flutter_test:
@@ -89,3 +91,14 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+flutter_launcher_icons:
+  web:
+    generate: true
+    image_path: "web/icons/app_icon.png"
+    theme_color: "#4F46E5"
+  windows:
+    generate: true
+    image_path: "web/icons/app_icon.png"
+    icon_size: 256
+    
