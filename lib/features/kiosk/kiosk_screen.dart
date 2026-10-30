@@ -1,29 +1,48 @@
+// ignore_for_file: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'dart:html' as html;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import '../../core/network/api_client.dart';
 
 class KioskScreen extends ConsumerStatefulWidget {
   final String tenantId;
-  // Le damos un valor por defecto (el GUID real de tu hotel Concept)
-  const KioskScreen({super.key, this.tenantId = 'EL_GUID_DE_CONCEPT_HOTEL'});
+  const KioskScreen({super.key, this.tenantId = 'D8D6CB00-2600-4A83-9C4E-02F76065210D'});
 
   @override
   ConsumerState<KioskScreen> createState() => _KioskScreenState();
 }
 
 class _KioskScreenState extends ConsumerState<KioskScreen> {
-  final _nameController = TextEditingController();
+  // Controladores
   final _emailController = TextEditingController();
+  final _firstNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  
+  // Estados
   bool _isLoading = false;
-  String _statusMessage = '';
+  String? _errorMessage;
+  
+  // Pantallas: 0 = Inicio, 1 = Registro, 2 = Saldo/Bienvenida, 3 = Registro Exitoso
+  int _currentScreen = 0; 
+  
+  String? _clientName;
+  int? _clientPoints;
 
-  // 👇 Variables para el Branding
-  String _brandingName = 'Bienvenido';
-  String? _brandingLogoUrl;
-  Color _brandingPrimary = Colors.indigo.shade900;
+  Color _primaryColor = const Color(0xFF4F46E5);
+  Color _secondaryColor = const Color(0xFF8B5CF6);
+  String? _logoUrl;
 
-  // 👇 Variable para detectar si el cliente ya existe
-  Map<String, dynamic>? _clienteExistente;
+  bool get _isWebLocal {
+    if (!kIsWeb) return false;
+    try {
+      return html.window.location.hostname == 'localhost';
+    } catch (e) {
+      return false;
+    }
+  }
 
   @override
   void initState() {
@@ -34,237 +53,418 @@ class _KioskScreenState extends ConsumerState<KioskScreen> {
   Future<void> _cargarBranding() async {
     try {
       final api = ref.read(apiClientProvider);
-      final response = await api.getTenantBranding(widget.tenantId);
-      
-      if (mounted) {
+      final response = await api.getBranding(widget.tenantId);
+      if (response.statusCode == 200) {
         setState(() {
-          _brandingName = response.data['nombre'] ?? 'Bienvenido';
-          _brandingLogoUrl = response.data['logoUrl'];
-          String hexPrimary = (response.data['colorPrimario'] ?? '#1A237E').replaceAll('#', '');
-          _brandingPrimary = Color(int.parse('FF$hexPrimary', radix: 16));
+          _primaryColor = _hexToColor(response.data['primaryColor'] ?? '#4F46E5');
+          _secondaryColor = _hexToColor(response.data['secondaryColor'] ?? '#8B5CF6');
+          _logoUrl = response.data['logoUrl'];
         });
       }
     } catch (e) {
-      // Default
+      // Ignorar
     }
   }
 
-  Future<void> _buscarORegistrar() async {
-    if (_emailController.text.isEmpty) {
-      setState(() => _statusMessage = 'Por favor, ingresa tu correo.');
+  Color _hexToColor(String hex) {
+    hex = hex.replaceAll('#', '');
+    if (hex.length == 6) hex = 'FF$hex';
+    return Color(int.parse(hex, radix: 16));
+  }
+
+  // --- LÓGICA ---
+  Future<void> _buscarCliente() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) return;
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final api = ref.read(apiClientProvider);
+      final response = await api.getBalance(email, widget.tenantId);
+
+      if (response.statusCode == 200) {
+        setState(() {
+          _clientName = response.data['cliente'];
+          _clientPoints = response.data['puntos'];
+          _currentScreen = 2; // Ir a pantalla de Saldo
+        });
+        _iniciarTimerRegreso();
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        // Cliente no existe -> Ir a Registro
+        setState(() {
+          _currentScreen = 1;
+        });
+      } else {
+        setState(() => _errorMessage = 'Error de conexión. Intenta de nuevo.');
+      }
+    } catch (e) {
+      setState(() => _errorMessage = 'Error inesperado.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _registrarCliente() async {
+    final firstName = _firstNameController.text.trim();
+    final lastName = _lastNameController.text.trim().isEmpty ? "Sin Apellido" : _lastNameController.text.trim();
+    final email = _emailController.text.trim();
+    final phone = _phoneController.text.trim();
+
+    if (firstName.isEmpty || email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('El nombre y el correo son obligatorios'), backgroundColor: Colors.orange),
+      );
       return;
     }
 
     setState(() {
       _isLoading = true;
-      _statusMessage = 'Buscando...';
+      _errorMessage = null;
     });
 
     try {
       final api = ref.read(apiClientProvider);
+      await api.createCustomer(
+        firstName: firstName, 
+        lastName: lastName, 
+        email: email, 
+        phone: phone.isEmpty ? null : phone, 
+      );
       
-      // 1. Intentamos buscar al cliente
-      try {
-        final response = await api.getBalance(tenantId: widget.tenantId, email: _emailController.text);
-        
-        // ¡El cliente existe! Mostramos su tarjeta de puntos
-        if (mounted) {
-          setState(() {
-            _clienteExistente = response.data;
-            _isLoading = false;
-            _statusMessage = '';
-          });
-        }
-      } catch (e) {
-        // 2. Si no existe (404), preparamos el registro
-        if (e.toString().contains('404')) {
-          if (_nameController.text.isEmpty) {
-            setState(() {
-              _statusMessage = 'No te encontramos. Ingresa tu nombre para registrarte.';
-              _isLoading = false;
-            });
-          } else {
-            // Ya tenemos el nombre, lo registramos
-            await api.createCustomer(
-              tenantId: widget.tenantId,
-              name: _nameController.text,
-              email: _emailController.text,
-            );
-            // Después de registrarlo, lo buscamos de nuevo para mostrar su tarjeta
-            final newResponse = await api.getBalance(tenantId: widget.tenantId, email: _emailController.text);
-            
-            if (mounted) {
-              setState(() {
-                _clienteExistente = newResponse.data;
-                _isLoading = false;
-                _statusMessage = '';
-              });
-            }
-          }
-        } else {
-          rethrow;
-        }
+      // Si el registro fue exitoso, mostramos la pantalla de ÉXITO (no error)
+      setState(() {
+        _clientName = firstName.trim(); // <-- .trim() para quitar espacios o caracteres raros
+        _currentScreen = 3; // Pantalla de Registro Exitoso
+      });
+
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409 || e.response?.statusCode == 400) {
+        // Si el correo ya existe, también lo tratamos como ÉXITO (ya está registrado)
+        setState(() {
+          _clientName = firstName;
+          _currentScreen = 3; // Pantalla de Registro Exitoso
+        });
+      } else {
+        setState(() => _errorMessage = 'Error al registrar. Intenta de nuevo.');
       }
     } catch (e) {
-      setState(() {
-        _statusMessage = 'Error de conexión. Contacta a recepción.';
-        _isLoading = false;
-      });
+      setState(() => _errorMessage = 'Error inesperado.');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _resetearKiosko() {
-    setState(() {
-      _clienteExistente = null;
-      _emailController.clear();
-      _nameController.clear();
-      _statusMessage = '';
+  void _iniciarTimerRegreso() {
+    Future.delayed(const Duration(seconds: 10), () {
+      if (mounted && _currentScreen == 2) {
+        _resetearPantalla();
+      }
     });
   }
 
+  void _resetearPantalla() {
+    setState(() {
+      _currentScreen = 0;
+      _emailController.clear();
+      _firstNameController.clear();
+      _lastNameController.clear();
+      _phoneController.clear();
+      _clientName = null;
+      _clientPoints = null;
+      _errorMessage = null;
+    });
+  }
+
+  // --- UI ---
   @override
   Widget build(BuildContext context) {
-    // 👇 Si el cliente existe, mostramos su tarjeta (Modo Consulta)
-    if (_clienteExistente != null) {
-      return _buildTarjetaCliente();
-    }
-
-    // 👇 Si no existe, mostramos el formulario (Modo Registro/Login)
     return Scaffold(
-      backgroundColor: _brandingPrimary,
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(40.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (_brandingLogoUrl != null && _brandingLogoUrl!.isNotEmpty)
-                Image.network(_brandingLogoUrl!, height: 100, errorBuilder: (_, __, ___) => const Icon(Icons.touch_app, size: 100, color: Colors.white))
-              else
-                const Icon(Icons.touch_app, size: 100, color: Colors.white),
-              
-              const SizedBox(height: 20),
-              Text(_brandingName, textAlign: TextAlign.center, style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 8),
-              const Text('Ingresa tu correo para acumular o consultar puntos', textAlign: TextAlign.center, style: TextStyle(fontSize: 20, color: Colors.white70)),
-              const SizedBox(height: 40),
-              
-              // Email
-              SizedBox(
-                width: 500,
-                child: TextField(
-                  controller: _emailController,
-                  style: const TextStyle(fontSize: 24),
-                  decoration: InputDecoration(
-                    hintText: 'Tu correo electrónico',
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
-                    prefixIcon: const Icon(Icons.email, size: 30),
-                  ),
-                ),
+      backgroundColor: const Color(0xFF0F172A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // ENCABEZADO (Arreglado para que no se mueva)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [_primaryColor, _secondaryColor], begin: Alignment.topLeft, end: Alignment.bottomRight),
               ),
-              const SizedBox(height: 20),
-
-              // Nombre (solo se muestra si el mensaje pide registro)
-              if (_statusMessage.contains('Ingresa tu nombre')) ...[
-                SizedBox(
-                  width: 500,
-                  child: TextField(
-                    controller: _nameController,
-                    style: const TextStyle(fontSize: 24),
-                    decoration: InputDecoration(
-                      hintText: 'Tu nombre completo',
-                      filled: true,
-                      fillColor: Colors.white,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(20)),
-                      prefixIcon: const Icon(Icons.person, size: 30),
+              child: Column(
+                children: [
+                  if (_logoUrl != null && _logoUrl!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16.0),
+                      child: Image.network(
+                        // Si es web local, usamos localhost. Si no, producción.
+                        _isWebLocal ? 'http://localhost:5265$_logoUrl' : 'https://api.loyaltybenefit.com$_logoUrl', 
+                        height: 80, 
+                        errorBuilder: (c, e, s) {
+                          // Si el logo no carga, mostramos un ícono genérico
+                          return const Icon(Icons.business, color: Colors.white, size: 80);
+                        }
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-              ],
+                  const Text('Bienvenido', style: TextStyle(fontSize: 48, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const SizedBox(height: 8),
+                  const Text('Ingresa tu correo para acumular o consultar puntos', style: TextStyle(fontSize: 20, color: Colors.white70)),
+                ],
+              ),
+            ),
 
-              const SizedBox(height: 20),
-              
-              // Botón Principal
-              SizedBox(
-                width: 500,
-                height: 80,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _buscarORegistrar,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            // CONTENIDO
+            Expanded(
+              child: Center(
+                child: Container(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  padding: const EdgeInsets.all(32.0),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: _buildCurrentScreen(),
                   ),
-                  child: _isLoading 
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : Text(
-                          _statusMessage.contains('Ingresa tu nombre') ? 'REGISTRARME' : 'INGRESAR', 
-                          style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)
-                        ),
                 ),
               ),
-              const SizedBox(height: 30),
-              Text(_statusMessage, textAlign: TextAlign.center, style: const TextStyle(fontSize: 20, color: Colors.yellowAccent)),
-            ],
-          ),
+            ),
+
+            // PIE DE PÁGINA
+            Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Text('Powered by Loyalty Benefit', style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 14)),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // 👇 Pantalla que ve el cliente que YA está registrado
-  Widget _buildTarjetaCliente() {
-    return Scaffold(
-      backgroundColor: Colors.grey[100],
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(40.0),
-          child: Container(
-            width: 600,
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [_brandingPrimary, _brandingPrimary.withValues(alpha: 0.7)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(30),
-              boxShadow: [BoxShadow(color: _brandingPrimary.withValues(alpha: 0.5), blurRadius: 20, offset: const Offset(0, 10))],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.check_circle, size: 80, color: Colors.white),
-                const SizedBox(height: 20),
-                Text('¡Hola, ${_clienteExistente!['cliente']}!', style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
-                const SizedBox(height: 20),
-                const Text('TUS PUNTOS', style: TextStyle(fontSize: 16, color: Colors.white70, letterSpacing: 2)),
-                Text('${_clienteExistente!['puntos']}', style: const TextStyle(fontSize: 80, fontWeight: FontWeight.bold, color: Colors.white)),
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(20)),
-                  child: Text('Nivel: ${_clienteExistente!['nivel']}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                ),
-                const SizedBox(height: 40),
-                ElevatedButton.icon(
-                  onPressed: _resetearKiosko,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Finalizar / Siguiente Cliente'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: _brandingPrimary,
-                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                  ),
-                )
-              ],
-            ),
+  Widget _buildCurrentScreen() {
+    if (_isLoading) {
+      return const Center(key: ValueKey('loading'), child: CircularProgressIndicator(color: Colors.greenAccent));
+    }
+
+    if (_errorMessage != null) {
+      return Column(
+        key: const ValueKey('error'),
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, color: Colors.redAccent, size: 60),
+          const SizedBox(height: 16),
+          Text(_errorMessage!, style: const TextStyle(color: Colors.redAccent, fontSize: 18), textAlign: TextAlign.center),
+          const SizedBox(height: 24),
+          ElevatedButton(onPressed: _resetearPantalla, child: const Text('Volver a intentar')),
+        ],
+      );
+    }
+
+    switch (_currentScreen) {
+      case 1:
+        return _buildRegistrationScreen();
+      case 2:
+        return _buildSuccessScreen();
+      case 3:
+        return _buildRegistrationSuccessScreen();
+      default:
+        return _buildIdleScreen();
+    }
+  }
+
+  // PANTALLA 0: INGRESO DE CORREO
+  Widget _buildIdleScreen() {
+    return Column(
+      key: const ValueKey('idle'),
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        TextField(
+          controller: _emailController,
+          keyboardType: TextInputType.emailAddress,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white, fontSize: 24),
+          decoration: InputDecoration(
+            hintText: 'Tu correo electrónico',
+            hintStyle: const TextStyle(color: Colors.white38),
+            prefixIcon: const Icon(Icons.email, color: Colors.white54, size: 30),
+            filled: true,
+            fillColor: const Color(0xFF1E293B),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+            contentPadding: const EdgeInsets.symmetric(vertical: 24, horizontal: 20),
           ),
         ),
+        const SizedBox(height: 32),
+        SizedBox(
+          width: double.infinity,
+          height: 70,
+          child: ElevatedButton(
+            onPressed: _buscarCliente,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.greenAccent.shade700,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 10,
+              shadowColor: Colors.greenAccent.withValues(alpha: 0.5),
+            ),
+            child: const Text('INGRESAR', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 2)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // PANTALLA 1: REGISTRO
+  Widget _buildRegistrationScreen() {
+    return SingleChildScrollView(
+      key: const ValueKey('registration'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white54),
+                onPressed: _resetearPantalla,
+              ),
+              const Expanded(
+                child: Text('¡Parece que eres nuevo!', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+              ),
+              const SizedBox(width: 48),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('El correo ${_emailController.text} no está registrado.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 16)),
+          const SizedBox(height: 32),
+          
+          TextField(
+            controller: _firstNameController,
+            style: const TextStyle(color: Colors.white),
+            decoration: _inputDecoration('Nombre(s)'),
+          ),
+          const SizedBox(height: 16),
+          
+          TextField(
+            controller: _lastNameController,
+            style: const TextStyle(color: Colors.white),
+            decoration: _inputDecoration('Apellidos'),
+          ),
+          const SizedBox(height: 16),
+          
+          TextField(
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            style: const TextStyle(color: Colors.white),
+            decoration: _inputDecoration('Teléfono (Opcional)'),
+          ),
+          const SizedBox(height: 32),
+          
+          SizedBox(
+            width: double.infinity,
+            height: 60,
+            child: ElevatedButton(
+              onPressed: _registrarCliente,
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent.shade700, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+              child: const Text('Registrarme', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
       ),
+    );
+  }
+
+  // PANTALLA 2: SALDO
+  Widget _buildSuccessScreen() {
+    return Column(
+      key: const ValueKey('success'),
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(Icons.check_circle, color: Colors.greenAccent, size: 100),
+        const SizedBox(height: 24),
+        Text('¡Hola, $_clientName!', style: const TextStyle(color: Colors.white, fontSize: 36, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+        const SizedBox(height: 16),
+        const Text('Tu saldo actual es:', style: TextStyle(color: Colors.white54, fontSize: 22)),
+        const SizedBox(height: 8),
+        Text('$_clientPoints Puntos', style: TextStyle(color: _primaryColor, fontSize: 64, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 40),
+        const Text('Por favor, pasa a recepción para canjear tus premios.', style: TextStyle(color: Colors.white54, fontSize: 18), textAlign: TextAlign.center),
+        const SizedBox(height: 40),
+        SizedBox(
+          width: 200,
+          height: 50,
+          child: ElevatedButton(
+            onPressed: _resetearPantalla,
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.white12, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+            child: const Text('Finalizar', style: TextStyle(color: Colors.white)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // PANTALLA 3: REGISTRO EXITOSO
+  Widget _buildRegistrationSuccessScreen() {
+    return Column(
+      key: const ValueKey('registration_success'),
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        // Logo del hotel (si existe) o ícono de verificación
+        if (_logoUrl != null && _logoUrl!.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 24.0),
+            child: Image.network(
+              _isWebLocal ? 'http://localhost:5265$_logoUrl' : 'https://api.loyaltybenefit.com$_logoUrl', 
+              height: 80, 
+              errorBuilder: (c, e, s) => const SizedBox.shrink()
+            ),
+          )
+        else
+          const Icon(Icons.verified, color: Colors.greenAccent, size: 100),
+          
+        const SizedBox(height: 24),
+        
+        // Título con el nombre del cliente (usando trim para evitar la J)
+        Text(
+          '¡Registro Exitoso, $_clientName!', 
+          style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold), 
+          textAlign: TextAlign.center
+        ),
+        const SizedBox(height: 16),
+        
+        // Subtítulo
+        const Text(
+          'Ya eres parte de nuestro programa de lealtad.', 
+          style: TextStyle(color: Colors.white54, fontSize: 20), 
+          textAlign: TextAlign.center
+        ),
+        const SizedBox(height: 40),
+        
+        // Botón con el color del hotel
+        SizedBox(
+          width: 300,
+          height: 60,
+          child: ElevatedButton(
+            onPressed: _resetearPantalla,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _primaryColor, // Usa el color primario del hotel
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 8,
+              shadowColor: _primaryColor.withValues(alpha: 0.5),
+            ),
+            child: const Text('Consultar mis Puntos', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  InputDecoration _inputDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: Colors.white54),
+      filled: true,
+      fillColor: const Color(0xFF1E293B),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
     );
   }
 }

@@ -8,8 +8,7 @@ class ApiClient {
   ApiClient()
       : _dio = Dio(
           BaseOptions(
-            baseUrl: 'https://api.loyaltybenefit.com',
-	    //baseUrl: 'http://localhost:5265',
+            baseUrl: 'http://localhost:5265',
             connectTimeout: const Duration(seconds: 10),
             receiveTimeout: const Duration(seconds: 10),
             headers: {
@@ -30,12 +29,10 @@ class ApiClient {
 
   void setKioskToken(String token) {
     _kioskToken = token;
-    _dio.options.headers['X-Kiosk-Token'] = token;
   }
 
   void clearToken() {
     _kioskToken = null;
-    _dio.options.headers.remove('X-Kiosk-Token');
   }
 
   // --- PAIRING ---
@@ -51,16 +48,15 @@ class ApiClient {
     });
   }
 
-  // --- MÉTODOS DEL KIOSKO ---
-  
-  Future<Response> getTenantBranding(String tenantId) {
+  // --- BRANDING ---
+  Future<Response> getBranding(String tenantId) {
     return _dio.get('/api/portal/branding', queryParameters: {
       'tenantId': tenantId,
     });
   }
 
-  // Aquí están los cambios: ahora usan {} (parámetros nombrados)
-  Future<Response> getBalance({required String email, required String tenantId}) {
+  // --- HUÉSPEDES ---
+  Future<Response> getBalance(String email, String tenantId) {
     return _dio.get('/api/portal/balance', queryParameters: {
       'email': email,
       'tenantId': tenantId,
@@ -68,18 +64,17 @@ class ApiClient {
   }
 
   Future<Response> createCustomer({
-    required String name,
+    required String firstName,
+    required String lastName,
     required String email,
-    required String tenantId,
     String? phone,
   }) {
     return _dio.post('/api/customers', data: {
-      'name': name,
+      'firstName': firstName,
+      'lastName': lastName,
       'email': email,
       'phone': phone,
-    }, options: Options(
-      headers: {'X-Tenant-Id': tenantId},
-    ));
+    });
   }
 }
 

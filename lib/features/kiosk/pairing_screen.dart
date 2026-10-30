@@ -15,6 +15,10 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
   final _codeController = TextEditingController();
   bool _isLoading = false;
   final _storage = const FlutterSecureStorage();
+  
+  // Branding por defecto (se actualizará si el kiosko ya sabe a qué hotel pertenece)
+  // Nota: Como aún no está vinculado, usamos colores genéricos de Loyalty Benefit.
+  final Color _primaryColor = const Color(0xFF4F46E5); 
 
   Future<void> _vincularKiosko() async {
     final code = _codeController.text.trim().toUpperCase();
@@ -34,9 +38,13 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
       if (response.statusCode == 200) {
         final kioskToken = response.data['kioskToken'];
         
-        // Guardamos el token de forma segura
+        // 1. Guardar en almacenamiento seguro
         await _storage.write(key: 'kiosk_token', value: kioskToken);
         
+        // 2. Configurar el ApiClient con el token
+        final api = ref.read(apiClientProvider);
+        api.setKioskToken(kioskToken);
+
         if (mounted) {
           Navigator.pushReplacement(
             context,
@@ -47,7 +55,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: Código inválido o expirado'), backgroundColor: Colors.red),
+          const SnackBar(content: Text('Código inválido o expirado'), backgroundColor: Colors.redAccent),
         );
       }
     } finally {
@@ -57,11 +65,8 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // El morado de tu branding
-    const primaryColor = Color(0xFF4F46E5);
-
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A),
+      backgroundColor: const Color(0xFF0F172A), // Fondo oscuro premium
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(32.0),
@@ -73,7 +78,7 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: primaryColor.withValues(alpha: 0.2),
+                  color: _primaryColor.withValues(alpha: 0.2),
                   blurRadius: 40,
                   spreadRadius: 10,
                 ),
@@ -82,8 +87,17 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.tablet_android, size: 80, color: primaryColor),
-                const SizedBox(height: 24),
+                // Icono con un brillo sutil
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: _primaryColor.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.tablet_mac, size: 80, color: _primaryColor),
+                ),
+                const SizedBox(height: 32),
+                
                 const Text(
                   'Vincular Kiosko',
                   style: TextStyle(
@@ -99,6 +113,8 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                   style: TextStyle(color: Colors.white54, fontSize: 16),
                 ),
                 const SizedBox(height: 40),
+                
+                // Campo de texto para el código
                 TextField(
                   controller: _codeController,
                   textAlign: TextAlign.center,
@@ -122,18 +138,20 @@ class _PairingScreenState extends ConsumerState<PairingScreen> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: primaryColor, width: 2),
+                      borderSide: BorderSide(color: _primaryColor, width: 2),
                     ),
                   ),
                 ),
                 const SizedBox(height: 32),
+                
+                // Botón de Vincular
                 SizedBox(
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _vincularKiosko,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: primaryColor,
+                      backgroundColor: _primaryColor,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     child: _isLoading
